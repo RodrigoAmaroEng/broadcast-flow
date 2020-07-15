@@ -7,22 +7,40 @@ import android.content.IntentFilter
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.Callable
 
 object FlowCaster {
     fun listen(
         context: Context,
         setup: BroadcastSetup
     ): Flow<Intent> {
-        val receiver = FlowReceiver(setup)
+        val channel = Channel<Intent>(UNLIMITED)
+        val receiver = FlowReceiver(channel, setup)
+        setup.startCommand?.run {
+            try {
+                val result = call()
+                runBlocking {
+                    result.collect {
+                        receiver.onReceive(context, it)
+                    }
+                }
+            } catch (ex: Exception) {
+                channel.close(ex)
+                return channel.consumeAsFlow()
+            }
+        }
         context.registerReceiver(receiver, setup.filter())
         return receiver.listen()
     }
 
 
-    private class FlowReceiver(private val setup: BroadcastSetup) : BroadcastReceiver() {
-        private val channel = Channel<Intent>(UNLIMITED)
+    private class FlowReceiver(
+        private val channel: Channel<Intent>,
+        private val setup: BroadcastSetup
+    ) : BroadcastReceiver() {
 
         fun listen() = channel.consumeAsFlow()
 
@@ -33,6 +51,7 @@ object FlowCaster {
                 runBlocking {
                     eventCounter++
                     val shouldExit = setup.exitCondition.shouldExit(intent, eventCounter)
+                    println("Exit: $shouldExit")
                     if (!shouldExit || setup.emitExitEvent) channel.send(intent)
                     if (shouldExit) dispose(context!!)
                 }
@@ -48,7 +67,8 @@ object FlowCaster {
     data class BroadcastSetup(
         val actions: List<String>,
         val exitCondition: ExitCondition = ExitCondition.Builder().build(),
-        val emitExitEvent: Boolean = true
+        val emitExitEvent: Boolean = true,
+        val startCommand: Callable<Flow<Intent>>? = null
     ) {
         fun filter() = IntentFilter().also { f -> actions.forEach { f.addAction(it) } }
     }
@@ -65,7 +85,8 @@ object FlowCaster {
                 if (action != null) rules.add(ActionConditionRule(action))
                 return object : ExitCondition {
                     override fun shouldExit(intent: Intent, eventNumber: Int): Boolean {
-                        return rules.takeIf { it.isNotEmpty() }
+                        return rules
+                            .takeIf { it.isNotEmpty() }
                             ?.none { !it.evaluate(intent, eventNumber) } ?: false
                     }
                 }
@@ -90,15 +111,4 @@ object FlowCaster {
         }
     }
 
-}
-
-sealed class Output {
-    object Undefined : Output()
-    object Yes : Output()
-    object No : Output()
-    companion object {
-        fun from(value: Boolean): Output {
-            return if (value) Yes else No
-        }
-    }
 }
