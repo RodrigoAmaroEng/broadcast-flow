@@ -44,3 +44,5 @@ dependencies {
 tasks.withType(Test) {
     systemProperty "robolectric.logging", "stdout"
 }
+
+apply from: 'publish.gradle'

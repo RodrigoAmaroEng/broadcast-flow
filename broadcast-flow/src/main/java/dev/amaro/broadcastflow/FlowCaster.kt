@@ -13,6 +13,9 @@ import kotlinx.coroutines.runBlocking
 import java.util.concurrent.Callable
 
 object FlowCaster {
+    fun setLogOn() = Logger.setOn()
+    fun setLogOff() = Logger.setOff()
+
     fun listen(
         context: Context,
         setup: BroadcastSetup
@@ -22,12 +25,15 @@ object FlowCaster {
         setup.startCommand?.run {
             try {
                 val result = call()
+                Logger.log("Start command succeeded")
                 runBlocking {
                     result.collect {
+                        Logger.log("Start command result: $it")
                         receiver.onReceive(context, it)
                     }
                 }
             } catch (ex: Exception) {
+                Logger.log("Start command failed: ${ex.message}")
                 channel.close(ex)
                 return channel.consumeAsFlow()
             }
@@ -47,11 +53,12 @@ object FlowCaster {
         private var eventCounter = 0
 
         override fun onReceive(context: Context?, intent: Intent?) {
+            Logger.log("Received: $intent")
             if (intent != null) {
                 runBlocking {
                     eventCounter++
                     val shouldExit = setup.exitCondition.shouldExit(intent, eventCounter)
-                    println("Exit: $shouldExit")
+                    Logger.log("Should exit: $shouldExit - Event Nr: $eventCounter")
                     if (!shouldExit || setup.emitExitEvent) channel.send(intent)
                     if (shouldExit) dispose(context!!)
                 }
@@ -59,6 +66,7 @@ object FlowCaster {
         }
 
         private fun dispose(context: Context) {
+            Logger.log("Disposed")
             channel.close()
             context.unregisterReceiver(this@FlowReceiver)
         }
